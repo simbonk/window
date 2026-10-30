@@ -5,12 +5,12 @@
 #panel input[type=number]{width:96px;}#panel input[type=checkbox]{width:auto;justify-self:start;}#panel select{width:110px;}#panel>div>button{margin:6px 0 2px;}
 .winstatus{opacity:.8;margin:2px 0 6px;font-variant-numeric:tabular-nums;}
 #gear{position:fixed;right:max(10px,env(safe-area-inset-right));bottom:max(10px,env(safe-area-inset-bottom));width:40px;height:40px;border-radius:20px;border:0;background:#0b0f1466;color:#e5e1d8;font:20px/40px system-ui;opacity:.35;z-index:5;}
-#preview{position:fixed;left:max(12px,env(safe-area-inset-left));bottom:max(12px,env(safe-area-inset-bottom));display:none;border-radius:6px;border:1px solid #fff3;}
+#frame{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;}#preview{position:fixed;left:max(12px,env(safe-area-inset-left));bottom:max(12px,env(safe-area-inset-bottom));display:none;border-radius:6px;border:1px solid #fff3;}
 #start{position:fixed;inset:0;z-index:10;display:flex;align-items:center;justify-content:center;background:#000a;backdrop-filter:blur(4px);color:#e5e1d8;font:15px/1.5 system-ui,sans-serif;text-align:center;padding:24px;}
 #start h1{font-size:22px;font-weight:600;margin:0 0 6px;}#start p{margin:6px auto;max-width:440px;opacity:.85;}
 #start button{font:16px system-ui;margin:14px 6px 0;padding:10px 18px;border-radius:22px;border:0;background:#e2a04e;color:#111;}#start button#skip{background:#ffffff22;color:#e5e1d8;}
 #rotate{display:none;}@media (orientation:portrait){#rotate{display:block;position:fixed;left:0;right:0;top:40%;text-align:center;color:#e5e1d8;font:15px system-ui;text-shadow:0 1px 3px #000;pointer-events:none;z-index:4;}}
-</style></head><body><canvas id="c"></canvas><div id="hud"><div id="fps">starting…</div><div class="help">drag: aim the window · ⚙︎ or H: settings · desktop: click for mouse look, WASD move</div></div><div id="panel" class="hidden"></div><div id="err"></div><button id="gear" aria-label="Settings">⚙︎</button><canvas id="preview"></canvas><div id="rotate">Turn the phone sideways (landscape) for the TV.</div>
+</style></head><body><canvas id="c"></canvas><div id="hud"><div id="fps">starting…</div><div class="help">drag: aim the window · ⚙︎ or H: settings · desktop: click for mouse look, WASD move</div></div><div id="panel" class="hidden"></div><div id="err"></div><button id="gear" aria-label="Settings">⚙︎</button><canvas id="frame"></canvas><canvas id="preview"></canvas><div id="rotate">Turn the phone sideways (landscape) for the TV.</div>
 <div id="start"><div><h1>Ocean window</h1><p>Your TV becomes a window. The front camera follows you so the view shifts as you move, like looking through glass.</p><p style="font-size:13px;opacity:.6">The camera picture stays on this phone. Nothing is uploaded.</p><p id="startmsg"></p><button id="go">Start head tracking</button><button id="skip">Just the ocean</button></div></div>
 <script type="module">
 // ---------------------------------------------------------------------------
@@ -51,16 +51,23 @@ const winDefaults = {
   distScale: 1, // depth calibration factor (set by Calibrate)
   eyeLevel: 45, // cm, your usual eye height above TV centre (horizon sits here)
   depth: 1, // multiplies how far the virtual camera moves with your head
-  zoom: 1, // >1 widens the view beyond a physically correct window
+  zoom: 3, // field of view relative to a physically exact window (1 = exact)
+  distGain: 0.35, // how much walking closer/farther widens/narrows the view (1 = exact)
+  frame: true, // draw a window frame at the screen
+  frameDepth: 9, // cm, how deep the frame's reveal is
   altitude: 2.4, // m, camera height above the water
   smooth: 1, // 0 = raw, higher = smoother but laggier
   flipX: false,
   tracker: "pose", // "pose" (works across a room) or "face" (closer than ~1.5 m)
   preview: false,
 };
+const WIN_VERSION = 2;
 const win = { ...winDefaults };
 try {
-  Object.assign(win, JSON.parse(localStorage.getItem("ocean-window") || "{}"));
+  const saved = JSON.parse(localStorage.getItem("ocean-window") || "{}");
+  // Version 1 saved a physically exact (very narrow) view; take the new default.
+  if ((saved.v || 1) < 2) delete saved.zoom;
+  Object.assign(win, saved, { v: WIN_VERSION });
 } catch {}
 if (HT_PARAMS.get("tracker")) win.tracker = HT_PARAMS.get("tracker");
 function winSave() {
@@ -315,19 +322,120 @@ function headCalibrate(distanceM) {
 // Off-axis frustum for the current head position. Returns view-space
 // tangents [left, right, bottom, top] at unit distance plus the eye offset
 // (screen frame, metres, relative to the resting viewpoint).
+//
+// The view's width and its sideways shift are handled separately: the shift
+// follows exact window geometry (that is what sells the effect), while the
+// width is widened by `zoom` and only partly follows your distance
+// (`distGain`), so walking up to the TV doesn't swing the zoom wildly.
 function windowFrustum(aspect) {
   const [w, h] = imageSize(aspect);
   const ex = head.x,
     ey = head.y - win.eyeLevel / 100,
     ez = Math.max(0.25, head.z),
-    k = win.zoom;
+    zw = Math.max(0.25, REST.z + (ez - REST.z) * win.distGain),
+    hw = ((w / 2) / zw) * win.zoom,
+    hh = ((h / 2) / zw) * win.zoom,
+    cx = -ex / ez,
+    cy = -ey / ez;
   return {
-    l: ((-w / 2 - ex) / ez) * k,
-    r: ((w / 2 - ex) / ez) * k,
-    b: ((-h / 2 - ey) / ez) * k,
-    t: ((h / 2 - ey) / ez) * k,
+    l: cx - hw,
+    r: cx + hw,
+    b: cy - hh,
+    t: cy + hh,
     off: [ex - REST.x, ey, ez - REST.z],
   };
+}
+
+// A window frame drawn over the picture. It sits at the TV (so it barely
+// moves), with a reveal going back into the wall and glazing bars on the
+// glass, which shift slightly against the sea as you move.
+function drawWindowFrame(cv) {
+  const dpr = Math.min(2, window.devicePixelRatio || 1),
+    cw = cv.clientWidth,
+    ch = cv.clientHeight;
+  if (cv.width !== Math.round(cw * dpr) || cv.height !== Math.round(ch * dpr))
+    (cv.width = Math.round(cw * dpr)), (cv.height = Math.round(ch * dpr));
+  const g = cv.getContext("2d");
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.clearRect(0, 0, cv.width, cv.height);
+  if (!win.frame) return;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const [iw, ih] = imageSize(cw / Math.max(1, ch)),
+    E = [head.x, head.y, Math.max(0.3, head.z)],
+    // Project a point (metres, z <= 0 is behind the screen) to CSS pixels.
+    P = (x, y, z) => {
+      const t = E[2] / (E[2] - z),
+        sx = E[0] + (x - E[0]) * t,
+        sy = E[1] + (y - E[1]) * t;
+      return [(sx / iw + 0.5) * cw, (0.5 - sy / ih) * ch];
+    },
+    quad = (pts, fill) => {
+      g.beginPath();
+      pts.forEach(([x, y, z], i) => {
+        const [px, py] = P(x, y, z);
+        i ? g.lineTo(px, py) : g.moveTo(px, py);
+      });
+      g.closePath();
+      g.fillStyle = fill;
+      g.fill();
+    },
+    shade = (k) => `rgb(${Math.round(200 * k)},${Math.round(193 * k)},${Math.round(180 * k)})`;
+  const b = Math.min(iw, ih) * 0.085, // frame border width
+    D = win.frameDepth / 100, // reveal depth
+    x0 = -iw / 2 + b,
+    x1 = iw / 2 - b,
+    y0 = -ih / 2 + b,
+    y1 = ih / 2 - b;
+  // Glazing bars: one upright and one rail, on the glass.
+  const bw = b * 0.38,
+    bd = 0.022,
+    railY = y0 + (y1 - y0) * 0.68,
+    box = (ax, ay, bx, by) => {
+      const zf = -D + bd,
+        zb = -D;
+      // Sides facing the eye, then the front face.
+      if (E[1] > by) quad([[ax, by, zb], [bx, by, zb], [bx, by, zf], [ax, by, zf]], shade(0.95));
+      if (E[1] < ay) quad([[ax, ay, zb], [bx, ay, zb], [bx, ay, zf], [ax, ay, zf]], shade(0.55));
+      if (E[0] < ax) quad([[ax, ay, zb], [ax, by, zb], [ax, by, zf], [ax, ay, zf]], shade(0.7));
+      if (E[0] > bx) quad([[bx, ay, zb], [bx, by, zb], [bx, by, zf], [bx, ay, zf]], shade(0.78));
+      quad([[ax, ay, zf], [bx, ay, zf], [bx, by, zf], [ax, by, zf]], shade(0.86));
+    };
+  // Faint reflection streaks on the glass.
+  {
+    const [ax, ay] = P(x0, y1, -D),
+      [bx, by] = P(x1, y0, -D),
+      gr = g.createLinearGradient(ax, ay, bx, by);
+    gr.addColorStop(0.0, "rgba(255,255,255,0)");
+    gr.addColorStop(0.28, "rgba(255,255,255,0.05)");
+    gr.addColorStop(0.34, "rgba(255,255,255,0)");
+    gr.addColorStop(0.42, "rgba(255,255,255,0.03)");
+    gr.addColorStop(0.5, "rgba(255,255,255,0)");
+    gr.addColorStop(1.0, "rgba(255,255,255,0)");
+    g.fillStyle = gr;
+    g.fillRect(Math.min(ax, bx), Math.min(ay, by), Math.abs(bx - ax), Math.abs(by - ay));
+  }
+  box(-bw / 2, y0, bw / 2, y1);
+  box(x0, railY - bw / 2, x1, railY + bw / 2);
+  // Reveal: the inside faces of the frame, from the screen back to the glass.
+  quad([[x0, y1, 0], [x1, y1, 0], [x1, y1, -D], [x0, y1, -D]], shade(0.58)); // head
+  quad([[x0, y0, 0], [x1, y0, 0], [x1, y0, -D], [x0, y0, -D]], shade(0.97)); // sill
+  quad([[x0, y0, 0], [x0, y1, 0], [x0, y1, -D], [x0, y0, -D]], shade(0.74)); // left
+  quad([[x1, y0, 0], [x1, y1, 0], [x1, y1, -D], [x1, y0, -D]], shade(0.8)); // right
+  // Front of the frame, flush with the screen.
+  const [fx0, fy1] = P(x0, y1, 0),
+    [fx1, fy0] = P(x1, y0, 0);
+  g.beginPath();
+  g.rect(0, 0, cw, ch);
+  g.rect(fx0, fy1, fx1 - fx0, fy0 - fy1);
+  const fg = g.createLinearGradient(0, 0, 0, ch);
+  fg.addColorStop(0, shade(0.82));
+  fg.addColorStop(1, shade(0.7));
+  g.fillStyle = fg;
+  g.fill("evenodd");
+  // Thin shadow line where the frame meets the reveal.
+  g.strokeStyle = "rgba(0,0,0,0.18)";
+  g.lineWidth = 1;
+  g.strokeRect(fx0, fy1, fx1 - fx0, fy0 - fy1);
 }
 
 // Small camera preview with tracked points, for setting up.
@@ -403,7 +511,10 @@ function buildWindowPanel(panel, cam) {
   slider("camFov", "Camera field of view (deg)", 40, 120, 1);
   slider("eyeLevel", "Horizon height above TV centre (cm)", -100, 150, 1);
   slider("depth", "Parallax depth ×", 0, 6, 0.05);
-  slider("zoom", "Field of view ×", 0.5, 3, 0.01);
+  slider("zoom", "Field of view ×", 0.5, 6, 0.05);
+  slider("distGain", "Zoom as you walk in/out", 0, 1, 0.05);
+  check("frame", "Window frame");
+  slider("frameDepth", "Frame depth (cm)", 0, 30, 0.5);
   slider("smooth", "Smoothing", 0.1, 4, 0.05, headFilterTune);
   const alt = slider("altitude", "Height above water (m)", 1.2, 30, 0.1, () => (cam.y = win.altitude));
   alt.addEventListener("change", () => (cam.y = win.altitude));
@@ -451,12 +562,14 @@ function buildWindowPanel(panel, cam) {
   sec.appendChild(h2);
   panel.prepend(sec);
 
-  const pv = document.getElementById("preview");
+  const pv = document.getElementById("preview"),
+    fc = document.getElementById("frame");
   const tick = () => {
     status.textContent =
       `Tracker: ${head.status}` +
       (head.tracking ? `  ·  you are ${head.z.toFixed(2)} m away, ${(head.x * 100).toFixed(0)} cm ${head.x >= 0 ? "right" : "left"}` : "");
     pv.style.display = win.preview ? "block" : "none";
+    drawWindowFrame(fc);
     if (win.preview) drawPreview(pv);
     requestAnimationFrame(tick);
   };

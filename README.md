@@ -55,8 +55,14 @@ Drag on the phone screen to aim the window. Settings are saved on the phone.
 ## Tuning
 
 - **Parallax depth ×** exaggerates how far the camera moves with you.
-- **Field of view ×** above 1 shows more than a real window would; at 1 the
-  geometry is physically correct, which looks most convincing.
+- **Field of view ×** sets how wide the view is. 1 is a physically exact
+  window, which is very narrow on a 42" TV, so the default is 3. The sideways
+  shift as you move always follows real window geometry.
+- **Zoom as you walk in/out** sets how much the view widens as you walk up to
+  the TV (1 = exact, 0 = not at all; default 0.35).
+- **Window frame** draws a frame with a reveal and glazing bars at the screen.
+  It barely moves, while the bars on the glass shift slightly against the sea.
+  **Frame depth** sets how deep the reveal is.
 - **Smoothing** trades jitter for lag. AirPlay already adds some lag.
 - **Height above water** lower values put the waves closer, so they shift
   more as you move.
