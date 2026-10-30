@@ -6,7 +6,7 @@ you. As you walk across the room the view shifts like looking through glass:
 step right and you see more of the sea to the left, step closer and the view
 opens up.
 
-Live page (once GitHub Pages is on): **https://simbonk.github.io/window/**
+Deployed on Vercel as a static site (no build step). Any HTTPS host works.
 
 ## How it works
 
@@ -24,8 +24,9 @@ Live page (once GitHub Pages is on): **https://simbonk.github.io/window/**
 
 ## Setup
 
-1. **Turn on GitHub Pages:** repo Settings → Pages → Source "Deploy from a
-   branch" → `main` / root. The camera needs HTTPS, which Pages provides.
+1. **Deploy:** import the repo in Vercel with the "Other" framework preset and
+   no build command; `index.html` is served as is. The camera needs HTTPS,
+   which Vercel provides.
 2. **On the iPhone**, open the page in Safari, then Share → Add to Home
    Screen, and launch it from the Home Screen icon. That gives a full-screen
    picture with no Safari bars on the TV.
