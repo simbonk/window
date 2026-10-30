@@ -51,9 +51,10 @@ const winDefaults = {
   distScale: 1, // depth calibration factor (set by Calibrate)
   eyeLevel: 45, // cm, your usual eye height above TV centre (horizon sits here)
   depth: 1, // multiplies how far the virtual camera moves with your head
-  zoom: 3, // field of view relative to a physically exact window (1 = exact)
-  distGain: 0.35, // how much walking closer/farther widens/narrows the view (1 = exact)
-  frame: true, // draw a window frame at the screen
+  fov: 58, // deg, vertical field of view when you stand at the resting spot
+  shift: 0.5, // how far the view slides as you move (1 = exact window geometry)
+  distGain: 0.2, // how much walking closer/farther widens/narrows the view (1 = exact)
+  frame: false, // draw a window frame at the screen
   frameDepth: 9, // cm, how deep the frame's reveal is
   altitude: 2.4, // m, camera height above the water
   smooth: 1, // 0 = raw, higher = smoother but laggier
@@ -61,12 +62,13 @@ const winDefaults = {
   tracker: "pose", // "pose" (works across a room) or "face" (closer than ~1.5 m)
   preview: false,
 };
-const WIN_VERSION = 2;
+const WIN_VERSION = 3;
 const win = { ...winDefaults };
 try {
   const saved = JSON.parse(localStorage.getItem("ocean-window") || "{}");
   // Version 1 saved a physically exact (very narrow) view; take the new default.
-  if ((saved.v || 1) < 2) delete saved.zoom;
+  // Older versions saved a much narrower view and the frame; take the new defaults.
+  if ((saved.v || 1) < 3) for (const k of ["zoom", "distGain", "frame", "depth"]) delete saved[k];
   Object.assign(win, saved, { v: WIN_VERSION });
 } catch {}
 if (HT_PARAMS.get("tracker")) win.tracker = HT_PARAMS.get("tracker");
@@ -95,6 +97,7 @@ const REST = { x: 0, z: 2.5 };
 const head = {
   x: REST.x,
   y: win.eyeLevel / 100,
+  yBase: win.eyeLevel / 100, // slowly follows your eye height (see headUpdate)
   z: REST.z,
   raw: null, // last unsmoothed measurement {x,y,z,args}
   tracking: false,
@@ -292,11 +295,16 @@ function htLoop() {
 
 // Called once per render frame. When nobody has been seen for a while, glide
 // back to the resting viewpoint.
+//
+// Your eye height drifts into `yBase` over ~10 s, so only changes in height
+// tilt the view. Sitting, standing, or holding the phone low doesn't leave
+// it staring at the sky or the water.
 function headUpdate(dt) {
+  if (head.tracking) head.yBase += (head.y - head.yBase) * (1 - Math.exp(-dt / 10));
   if (!head.tracking && performance.now() - head.lastSeen > 2500) {
     const k = 1 - Math.exp(-dt * 0.8);
     head.x += (REST.x - head.x) * k;
-    head.y += (win.eyeLevel / 100 - head.y) * k;
+    head.y += (head.yBase - head.y) * k;
     head.z += (REST.z - head.z) * k;
   }
 }
@@ -314,6 +322,7 @@ function headCalibrate(distanceM) {
   head.x = m.x;
   head.y = m.y;
   head.z = m.z;
+  head.yBase = m.y;
   headFilters.forEach((f) => f.reset());
   winSave();
   return true;
@@ -323,20 +332,23 @@ function headCalibrate(distanceM) {
 // tangents [left, right, bottom, top] at unit distance plus the eye offset
 // (screen frame, metres, relative to the resting viewpoint).
 //
-// The view's width and its sideways shift are handled separately: the shift
-// follows exact window geometry (that is what sells the effect), while the
-// width is widened by `zoom` and only partly follows your distance
-// (`distGain`), so walking up to the TV doesn't swing the zoom wildly.
+// The view is as wide as the original free camera (so the sea feels far
+// away), not a physically exact window, which on a TV is very narrow. Moving
+// slides the view like a window would, scaled down by `shift`, and walking
+// in or out changes the width only by `distGain`.
 function windowFrustum(aspect) {
   const [w, h] = imageSize(aspect);
   const ex = head.x,
-    ey = head.y - win.eyeLevel / 100,
+    ey = head.y - head.yBase,
     ez = Math.max(0.25, head.z),
     zw = Math.max(0.25, REST.z + (ez - REST.z) * win.distGain),
-    hw = ((w / 2) / zw) * win.zoom,
-    hh = ((h / 2) / zw) * win.zoom,
-    cx = -ex / ez,
-    cy = -ey / ez;
+    hh = Math.tan((win.fov * Math.PI) / 360) * (REST.z / zw),
+    hw = hh * (w / h),
+    // Vertical moves count half, and the slide is capped so the view never
+    // swings far from the horizon.
+    lim = (v) => Math.max(-0.35, Math.min(0.35, v)),
+    cx = lim((-ex / ez) * win.shift),
+    cy = lim((-ey / ez) * win.shift * 0.5);
   return {
     l: cx - hw,
     r: cx + hw,
@@ -509,9 +521,9 @@ function buildWindowPanel(panel, cam) {
   slider("camBelow", "Camera below picture (cm)", -80, 40, 0.5);
   slider("camTilt", "Camera tilt up (deg)", -30, 30, 0.5);
   slider("camFov", "Camera field of view (deg)", 40, 120, 1);
-  slider("eyeLevel", "Horizon height above TV centre (cm)", -100, 150, 1);
   slider("depth", "Parallax depth ×", 0, 6, 0.05);
-  slider("zoom", "Field of view ×", 0.5, 6, 0.05);
+  slider("fov", "Field of view (deg)", 20, 100, 1);
+  slider("shift", "Look-around strength", 0, 1.5, 0.05);
   slider("distGain", "Zoom as you walk in/out", 0, 1, 0.05);
   check("frame", "Window frame");
   slider("frameDepth", "Frame depth (cm)", 0, 30, 0.5);
@@ -1366,7 +1378,7 @@ async function Ga() {
   }
   R.get("fov") && (f.fovY = Number(R.get("fov")) * F);
   // Window mode: level view, horizon near your eye line, height from settings.
-  winOn && !R.get("cam") && ((f.pitch = -1.5 * F), (f.y = win.altitude));
+  winOn && !R.get("cam") && (f.y = win.altitude);
   let hOff = [0, 0, 0];
   const A = Object.create(null);
   addEventListener("keydown", (e) => {

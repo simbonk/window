@@ -44,7 +44,7 @@ Deployed on Vercel as a static site (no build step). Any HTTPS host works.
      lens.
    - Stand where you normally watch, measure the distance from your eyes to
      the screen, type it in, and tap **Calibrate**. This fixes the distance
-     scale and puts the horizon at your eye height.
+     scale.
    - If the view moves the wrong way when you step sideways, tick
      **Flip left/right**.
    - **Show camera preview** helps check that it can see you.
@@ -55,14 +55,16 @@ Drag on the phone screen to aim the window. Settings are saved on the phone.
 ## Tuning
 
 - **Parallax depth ×** exaggerates how far the camera moves with you.
-- **Field of view ×** sets how wide the view is. 1 is a physically exact
-  window, which is very narrow on a 42" TV, so the default is 3. The sideways
-  shift as you move always follows real window geometry.
-- **Zoom as you walk in/out** sets how much the view widens as you walk up to
-  the TV (1 = exact, 0 = not at all; default 0.35).
-- **Window frame** draws a frame with a reveal and glazing bars at the screen.
-  It barely moves, while the bars on the glass shift slightly against the sea.
-  **Frame depth** sets how deep the reveal is.
+- **Field of view** defaults to 58° vertical, the same as the free camera,
+  so the sea feels far away.
+- **Look-around strength** sets how far the view slides as you move
+  (1 = exact window geometry; default 0.5). The slide is capped, and up/down
+  moves count half.
+- **Zoom as you walk in/out** sets how much walking toward the TV widens the
+  view (default 0.2).
+- Your eye height is learned over about 10 seconds, so sitting, standing or
+  holding the phone low doesn't tilt the view at the sky or the water.
+- **Window frame** (off by default) draws a frame at the screen.
 - **Smoothing** trades jitter for lag. AirPlay already adds some lag.
 - **Height above water** lower values put the waves closer, so they shift
   more as you move.
